@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Truss Designer</title>
+  
+  <!-- React, ReactDOM, and Babel -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.21.2/babel.min.js"></script>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- jsPDF for PDF generation -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+  <style>
+    body {
+      font-family: 'Arial', sans-serif;
+      margin: 0;
+      padding: 20px;
+    }
+    
+    .thin-line { stroke: #000; stroke-width: 1; }
+    .medium-line { stroke: #000; stroke-width: 1.5; }
+    .thick-line { stroke: #000; stroke-width: 2; }
+    .dimension-line { stroke: #000; stroke-width: 0.75; stroke-dasharray: 5,3; }
+    .text { font-family: Arial; font-size: 12px; text-anchor: middle; }
+    .arrow { stroke: #000; stroke-width: 0.75; fill: none; }
+    .lumber { stroke: #000; stroke-width: 1.5; fill: none; }
+  </style>
+</head>
+<body>
+  <div id="root" class="max-w-7xl mx-auto"></div>
+
+  <!-- React Component -->
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    const TrussDesigner = () => {
+      // Function to generate base64 encoded JSON data
+      const generateBase64Data = () => {
+        // Create a data object with all the truss information
+        const trussData = {
+          dimensions: { ...dimensions },
+          measurements: calculateMeasurements(),
+          timestamp: new Date().toISOString(),
+        };
+        
+        // Convert to JSON string
+        const jsonString = JSON.stringify(trussData, null, 2);
+        
+        // Convert to Base64
+        return btoa(jsonString);
+      };
+      
+      // Function to generate and download PDF
+      const generatePDF = () => {
+        const { jsPDF } = window.jspdf;
+        
+        // Create a new PDF
+        const pdf = new jsPDF({
+          orientation: 'landscape',
+          unit: 'mm',
+          format: 'a4'
+        });
+        
+        // Get the SVG element
+        const svgElement = document.querySelector('.truss-svg');
+        
+        if (!svgElement) {
+          alert('Error: Could not find the truss diagram');
+          return;
+        }
+        
+        try {
+          // Convert SVG to a data URL (uses the canvg approach)
+          const svgString = new XMLSerializer().serializeToString(svgElement);
+          const canvas = document.createElement('canvas');
+          // Set canvas dimensions to match the SVG viewBox
+          const viewBox = svgElement.getAttribute('viewBox').split(' ');
+          canvas.width = parseInt(viewBox[2], 10);
+          canvas.height = parseInt(viewBox[3], 10);
+          
+          // Create context and draw SVG to canvas
+          const ctx = canvas.getContext('2d');
+          
+          // Create an image from the SVG
+          const img = new Image();
+          
+          // Set up image onload handler
+          img.onload = function() {
+            // Clear canvas and draw the image
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            
+            // Get PNG data URL from canvas
+            const pngDataUrl = canvas.toDataURL('image/png');
+            
+            // Add title to PDF
+            pdf.setFont('helvetica', 'bold');
+            pdf.setFontSize(16);
+            pdf.text('Roof Truss Design', 15, 15);
+            
+            // Add specifications
+            pdf.setFont('helvetica', 'normal');
+            pdf.setFontSize(10);
+            let yPos = 25;
+            pdf.text('Specifications:', 15, yPos);
+            yPos += 5;
+            
+            // Add truss details
+            pdf.text(`Span: ${decimalToFIS(dimensions.span)}`, 20, yPos); yPos += 5;
+            pdf.text(`Height: ${decimalToFIS(dimensions.height)}`, 20, yPos); yPos += 5;
+            pdf.text(`Pitch: ${dimensions.pitch.toFixed(1)}/12`, 20, yPos); yPos += 5;
+            pdf.text(`Top Chord Length: ${calculateMeasurements().topChordLength}`, 20, yPos); yPos += 10;
+            
+            // Calculate image dimensions
+            const pageWidth = pdf.internal.pageSize.getWidth();
+            const pageHeight = pdf.internal.pageSize.getHeight();
+            const imgWidth = pageWidth - 30; // leave margin
+            const imgHeight = (canvas.height * imgWidth) / canvas.width;
+            
+            // Add the PNG image to PDF
+            pdf.addImage(pngDataUrl, 'PNG', 15, yPos, imgWidth, imgHeight);
+            
+            // Add footer
+            const date = new Date().toLocaleDateString();
+            pdf.setFontSize(8);
+            pdf.text(`Generated on ${date}`, pdf.internal.pageSize.getWidth() - 50, pdf.internal.pageSize.getHeight() - 10);
+            
+            // Save PDF
+            pdf.save('truss-design.pdf');
+          };
+          
+          // Set image source to SVG data URL
+          img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgString)));
+          
+        } catch (err) {
+          console.error('Error generating PDF:', err);
+          alert('Error generating PDF. See console for details.');
+        }
+      };
+      // State for truss dimensions and properties
+      const [dimensions, setDimensions] = useState({
+        span: 20, // in feet
+        height: 5, // in feet
+        pitch: 6, // rise/run ratio (e.g., 6/12)
+        tailLeft: 2, // in feet
+        tailRight: 2, // in feet
+      });
+      
+      // Calculate height from pitch and span
+      const calculateHeightFromPitch = (pitch, span) => {
+        return (pitch / 12) * (span / 2);
+      };
+      
+      // Calculate pitch from height and span
+      const calculatePitchFromHeight = (height, span) => {
+        return (height / (span / 2)) * 12;
+      };
+
+      // State for display options
+      const [displayOptions, setDisplayOptions] = useState({
+        showDimensions: true,
+        showAngles: true,
+        showLabels: true,
+        showMemberLengths: true,
+      });
+
+      // Convert decimal feet to Feet-Inches-Sixteenths format
+      const decimalToFIS = (decimalFeet) => {
+        const feet = Math.floor(decimalFeet);
+        const remainingInches = (decimalFeet - feet) * 12;
+        const inches = Math.floor(remainingInches);
+        const sixteenths = Math.round((remainingInches - inches) * 16);
+        
+        // Handle carrying over if sixteenths = 16
+        let adjustedInches = inches;
+        let adjustedSixteenths = sixteenths;
+        
+        if (adjustedSixteenths === 16) {
+          adjustedInches += 1;
+          adjustedSixteenths = 0;
+        }
+        
+        // Handle carrying over if inches = 12
+        let adjustedFeet = feet;
+        if (adjustedInches === 12) {
+          adjustedFeet += 1;
+          adjustedInches = 0;
+        }
+        
+        let result = `${adjustedFeet}'`;
+        if (adjustedInches > 0 || adjustedSixteenths > 0) {
+          result += `-${adjustedInches}`;
+          if (adjustedSixteenths > 0) {
+            // Simplify fractions
+            if (adjustedSixteenths % 8 === 0) {
+              result += `-${adjustedSixteenths/8}/2`;
+            } else if (adjustedSixteenths % 4 === 0) {
+              result += `-${adjustedSixteenths/4}/4`;
+            } else if (adjustedSixteenths % 2 === 0) {
+              result += `-${adjustedSixteenths/2}/8`;
+            } else {
+              result += `-${adjustedSixteenths}/16`;
+            }
+          }
+        }
+        
+        return result;
+      };
+
+      // Calculate derived measurements
+      const calculateMeasurements = () => {
+        const { span, height } = dimensions;
+        const halfSpan = span / 2;
+        
+        // Length of top chords using Pythagorean theorem
+        const topChordLength = Math.sqrt(halfSpan * halfSpan + height * height);
+        
+        // Angles
+        const topChordAngle = Math.atan(height / halfSpan) * (180 / Math.PI);
+        const bottomAngle = 90 - topChordAngle;
+        
+        return {
+          topChordLength: decimalToFIS(topChordLength),
+          topChordLengthDecimal: topChordLength.toFixed(2),
+          topChordAngle: topChordAngle.toFixed(1),
+          bottomAngle: bottomAngle.toFixed(1),
+          slope: height / halfSpan, // Store the slope for tail calculations
+        };
+      };
+      
+      const measurements = calculateMeasurements();
+
+      // Handle dimension changes
+      const handleDimensionChange = (e) => {
+        const { name, value } = e.target;
+        const numericValue = parseFloat(value);
+        
+        // Create a copy of current dimensions
+        const newDimensions = { ...dimensions };
+        
+        // Update the changed dimension
+        newDimensions[name] = numericValue;
+        
+        // If height or pitch changes, update the other value to stay in sync
+        if (name === 'height') {
+          // When height changes, recalculate pitch
+          newDimensions.pitch = calculatePitchFromHeight(numericValue, newDimensions.span);
+        } else if (name === 'pitch') {
+          // When pitch changes, recalculate height
+          newDimensions.height = calculateHeightFromPitch(numericValue, newDimensions.span);
+        } else if (name === 'span') {
+          // When span changes, use current pitch to recalculate height
+          newDimensions.height = calculateHeightFromPitch(newDimensions.pitch, numericValue);
+        }
+        
+        // Update state with new dimensions
+        setDimensions(newDimensions);
+      };
+
+      // State for base64 data (for export/import)
+      const [base64Data, setBase64Data] = useState('');
+      
+      // Function to import truss data from base64
+      const importFromBase64 = (encodedData) => {
+        try {
+          // Decode Base64 to JSON string
+          const jsonString = atob(encodedData);
+          
+          // Parse JSON
+          const importedData = JSON.parse(jsonString);
+          
+          // Check if valid data format
+          if (importedData.dimensions) {
+            // Update dimensions state
+            setDimensions(importedData.dimensions);
+            return true;
+          }
+          return false;
+        } catch (error) {
+          console.error('Error importing data:', error);
+          return false;
+        }
+      };
+      
+      // Add an effect to ensure height and pitch are in sync on initial load
+      useEffect(() => {
+        // Calculate height based on current pitch and span to ensure consistency
+        const calculatedHeight = calculateHeightFromPitch(dimensions.pitch, dimensions.span);
+        
+        // Only update if there's a significant difference to avoid infinite loops
+        if (Math.abs(calculatedHeight - dimensions.height) > 0.01) {
+          setDimensions(prev => ({
+            ...prev,
+            height: calculatedHeight
+          }));
+        }
+      }, []);
+
+      // Toggle display options
+      const toggleDisplayOption = (option) => {
+        setDisplayOptions(prev => ({
+          ...prev,
+          [option]: !prev[option]
+        }));
+      };
+
+      // Generate SVG for the truss
+      const generateTrussSVG = () => {
+        const { span, height, tailLeft, tailRight } = dimensions;
+        const { showDimensions, showAngles, showLabels, showMemberLengths } = displayOptions;
+        
+        // SVG dimensions and scaling
+        const canvasWidth = 800;
+        const canvasHeight = 400;
+        const scale = (canvasWidth - 200) / span; // Adjust scale to fit canvas with margins
+        
+        // Calculate coordinates
+        const leftHeelX = 100;
+        const rightHeelX = leftHeelX + (span * scale);
+        const bottomY = 300;
+        const peakX = leftHeelX + ((span / 2) * scale);
+        const peakY = bottomY - (height * scale);
+        
+        // Calculate tail coordinates using the same pitch as top chord
+        // For the tail, we're extending the top chord line but in the opposite direction
+        const slope = measurements.slope;
+        
+        // Left tail: extend the left top chord line
+        const leftTailX = leftHeelX - (tailLeft * scale);
+        const leftTailY = bottomY + (tailLeft * scale * slope); // Follows top chord pitch exactly
+        
+        // Right tail: extend the right top chord line
+        const rightTailX = rightHeelX + (tailRight * scale);
+        const rightTailY = bottomY + (tailRight * scale * slope); // Follows top chord pitch exactly
+        
+        return (
+          <svg xmlns="http://www.w3.org/2000/svg" className="truss-svg" viewBox={`0 0 ${canvasWidth} ${canvasHeight}`} width="100%" height="100%">
+            {/* Styles */}
+            <defs>
+              <style>
+                {`
+                  .thin-line { stroke: #000; stroke-width: 1; }
+                  .medium-line { stroke: #000; stroke-width: 1.5; }
+                  .thick-line { stroke: #000; stroke-width: 2; }
+                  .dimension-line { stroke: #000; stroke-width: 0.75; stroke-dasharray: 5,3; }
+                  .text { font-family: Arial; font-size: 12px; text-anchor: middle; }
+                  .arrow { stroke: #000; stroke-width: 0.75; fill: none; }
+                  .lumber { stroke: #000; stroke-width: 1.5; fill: none; }
+                `}
+              </style>
+            </defs>
+
+            {/* Truss frame outline */}
+            {/* Bottom chord */}
+            <line x1={leftHeelX} y1={bottomY} x2={rightHeelX} y2={bottomY} className="lumber" />
+            
+            {/* Left top chord */}
+            <line x1={leftHeelX} y1={bottomY} x2={peakX} y2={peakY} className="lumber" />
+            
+            {/* Right top chord */}
+            <line x1={rightHeelX} y1={bottomY} x2={peakX} y2={peakY} className="lumber" />
+            
+            {/* King post */}
+            <line x1={peakX} y1={peakY} x2={peakX} y2={bottomY} className="lumber" />
+            
+            {/* Left tail */}
+            <line x1={leftHeelX} y1={bottomY} x2={leftTailX} y2={leftTailY} className="lumber" />
+            
+            {/* Right tail */}
+            <line x1={rightHeelX} y1={bottomY} x2={rightTailX} y2={rightTailY} className="lumber" />
+            
+            {/* Member thickness indicators */}
+            <line x1={leftHeelX} y1={bottomY-5} x2={leftHeelX} y2={bottomY+5} className="thin-line" />
+            <line x1={rightHeelX} y1={bottomY-5} x2={rightHeelX} y2={bottomY+5} className="thin-line" />
+            <line x1={peakX-5} y1={peakY} x2={peakX+5} y2={peakY} className="thin-line" />
+            <line x1={peakX-5} y1={bottomY-height*scale/2} x2={peakX+5} y2={bottomY-height*scale/2} className="thin-line" />
+            
+            {/* Heel wedges */}
+            <path d={`M ${leftHeelX} ${bottomY} L ${leftHeelX+10} ${bottomY-10} L ${leftHeelX+10} ${bottomY} Z`} className="thin-line" fill="#fff" />
+            <path d={`M ${rightHeelX} ${bottomY} L ${rightHeelX-10} ${bottomY-10} L ${rightHeelX-10} ${bottomY} Z`} className="thin-line" fill="#fff" />
+            
+            {/* Dimension lines and measurements (optional) */}
+            {showDimensions && (
+              <>
+                {/* Span dimensions */}
+                <line x1={leftHeelX} y1={bottomY+50} x2={peakX} y2={bottomY+50} className="dimension-line" />
+                <line x1={peakX} y1={bottomY+50} x2={rightHeelX} y2={bottomY+50} className="dimension-line" />
+                <line x1={leftHeelX} y1={bottomY+45} x2={leftHeelX} y2={bottomY+55} className="thin-line" />
+                <line x1={peakX} y1={bottomY+45} x2={peakX} y2={bottomY+55} className="thin-line" />
+                <line x1={rightHeelX} y1={bottomY+45} x2={rightHeelX} y2={bottomY+55} className="thin-line" />
+                
+                {/* Text for half spans */}
+                <text x={(leftHeelX+peakX)/2} y={bottomY+45} className="text">{decimalToFIS(span/2)}</text>
+                <text x={(rightHeelX+peakX)/2} y={bottomY+45} className="text">{decimalToFIS(span/2)}</text>
+                
+                {/* Total span */}
+                <line x1={leftHeelX} y1={bottomY+80} x2={rightHeelX} y2={bottomY+80} className="dimension-line" />
+                <line x1={leftHeelX} y1={bottomY+75} x2={leftHeelX} y2={bottomY+85} className="thin-line" />
+                <line x1={rightHeelX} y1={bottomY+75} x2={rightHeelX} y2={bottomY+85} className="thin-line" />
+                <text x={(leftHeelX+rightHeelX)/2} y={bottomY+95} className="text">{`${decimalToFIS(span)} Overall`}</text>
+                
+                {/* Height dimension */}
+                <line x1={peakX+30} y1={peakY} x2={peakX+30} y2={bottomY} className="dimension-line" />
+                <line x1={peakX+25} y1={peakY} x2={peakX+35} y2={peakY} className="thin-line" />
+                <line x1={peakX+25} y1={bottomY} x2={peakX+35} y2={bottomY} className="thin-line" />
+                <text x={peakX+50} y={(peakY+bottomY)/2} className="text">{decimalToFIS(height)}</text>
+              </>
+            )}
+            
+            {/* Angles (optional) */}
+            {showAngles && (
+              <>
+                <path d={`M ${leftHeelX+20} ${bottomY} A 20 20 0 0 1 ${leftHeelX+20} ${bottomY-20}`} className="thin-line" fill="none" />
+                <path d={`M ${rightHeelX-20} ${bottomY} A 20 20 0 0 0 ${rightHeelX-20} ${bottomY-20}`} className="thin-line" fill="none" />
+                <path d={`M ${peakX} ${peakY+20} A 20 20 0 0 0 ${peakX-20} ${peakY+20}`} className="thin-line" fill="none" />
+                <path d={`M ${peakX} ${peakY+20} A 20 20 0 0 1 ${peakX+20} ${peakY+20}`} className="thin-line" fill="none" />
+                
+                <text x={leftHeelX+10} y={bottomY-40} className="text">{measurements.bottomAngle}°</text>
+                <text x={rightHeelX-10} y={bottomY-40} className="text">{measurements.bottomAngle}°</text>
+                <text x={peakX-20} y={peakY+10} className="text">{measurements.topChordAngle}°</text>
+                <text x={peakX+20} y={peakY+10} className="text">{measurements.topChordAngle}°</text>
+              </>
+            )}
+            
+            {/* Member labels (optional) */}
+            {showLabels && (
+              <>
+                <text x={leftHeelX-30} y={bottomY-15} className="text" textAnchor="start">Tail</text>
+                <text x={rightHeelX+30} y={bottomY-15} className="text" textAnchor="end">Tail</text>
+                <text x={peakX} y={bottomY+15} className="text">Bottom Chord</text>
+                <text x={(leftHeelX+peakX)/2-30} y={(bottomY+peakY)/2} className="text">Left Top Chord</text>
+                <text x={(rightHeelX+peakX)/2+30} y={(bottomY+peakY)/2} className="text">Right Top Chord</text>
+                <text x={peakX-25} y={(bottomY+peakY)/2} className="text">King Post</text>
+                
+                <text x={leftHeelX} y={bottomY+20} className="text" textAnchor="start">0+0(Heel)</text>
+                <text x={rightHeelX} y={bottomY+20} className="text" textAnchor="end">{`${span}+0(Heel)`}</text>
+                <text x={peakX} y={peakY-10} className="text">Peak</text>
+                
+                <text x={rightHeelX+50} y={peakY+10} className="text" textAnchor="end">{`${dimensions.pitch.toFixed(1)}/12 Pitch`}</text>
+              </>
+            )}
+            
+            {/* Member lengths (optional) */}
+            {showMemberLengths && (
+              <>
+                <text x={(leftHeelX+peakX)/2} y={(bottomY+peakY)/2+30} className="text">{measurements.topChordLength}</text>
+                <text x={(rightHeelX+peakX)/2} y={(bottomY+peakY)/2+30} className="text">{measurements.topChordLength}</text>
+                <text x={peakX} y={(bottomY+peakY)/2+30} className="text">{decimalToFIS(height)}</text>
+              </>
+            )}
+          </svg>
+        );
+      };
+
+      return (
+        <div className="flex flex-col md:flex-row w-full gap-4">
+          <div className="md:w-1/3 p-4 bg-gray-100 rounded-lg">
+            <h2 className="text-xl font-bold mb-4">Truss Designer</h2>
+            
+            <div className="space-y-4">
+              <div>
+                <h3 className="font-semibold mb-2">Dimensions</h3>
+                
+                <div className="space-y-2">
+                  <div>
+                    <label className="block text-sm">Overall Span (ft)</label>
+                    <input
+                      type="number"
+                      name="span"
+                      value={dimensions.span}
+                      onChange={handleDimensionChange}
+                      min="8"
+                      max="40"
+                      step="0.5"
+                      className="w-full p-1 border rounded"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm">Height (ft)</label>
+                    <input
+                      type="number"
+                      name="height"
+                      value={dimensions.height.toFixed(2)}
+                      onChange={handleDimensionChange}
+                      min="2"
+                      max="15"
+                      step="0.25"
+                      className="w-full p-1 border rounded"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">Linked with pitch</p>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm">Pitch (rise per 12" run)</label>
+                    <input
+                      type="number"
+                      name="pitch"
+                      value={dimensions.pitch.toFixed(1)}
+                      onChange={handleDimensionChange}
+                      min="1"
+                      max="12"
+                      step="0.5"
+                      className="w-full p-1 border rounded"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">Linked with height</p>
+                  </div>
+                  
+                  <div className="flex gap-2">
+                    <div className="w-1/2">
+                      <label className="block text-sm">Left Tail (ft)</label>
+                      <input
+                        type="number"
+                        name="tailLeft"
+                        value={dimensions.tailLeft}
+                        onChange={handleDimensionChange}
+                        min="0"
+                        max="5"
+                        step="0.5"
+                        className="w-full p-1 border rounded"
+                      />
+                    </div>
+                    
+                    <div className="w-1/2">
+                      <label className="block text-sm">Right Tail (ft)</label>
+                      <input
+                        type="number"
+                        name="tailRight"
+                        value={dimensions.tailRight}
+                        onChange={handleDimensionChange}
+                        min="0"
+                        max="5"
+                        step="0.5"
+                        className="w-full p-1 border rounded"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              <div>
+                <h3 className="font-semibold mb-2">Display Options</h3>
+                
+                <div className="space-y-1">
+                  <div className="flex items-center">
+                    <input
+                      type="checkbox"
+                      id="showDimensions"
+                      checked={displayOptions.showDimensions}
+                      onChange={() => toggleDisplayOption('showDimensions')}
+                      className="mr-2"
+                    />
+                    <label htmlFor="showDimensions">Show Dimensions</label>
+                  </div>
+                  
+                  <div className="flex items-center">
+                    <input
+                      type="checkbox"
+                      id="showAngles"
+                      checked={displayOptions.showAngles}
+                      onChange={() => toggleDisplayOption('showAngles')}
+                      className="mr-2"
+                    />
+                    <label htmlFor="showAngles">Show Angles</label>
+                  </div>
+                  
+                  <div className="flex items-center">
+                    <input
+                      type="checkbox"
+                      id="showLabels"
+                      checked={displayOptions.showLabels}
+                      onChange={() => toggleDisplayOption('showLabels')}
+                      className="mr-2"
+                    />
+                    <label htmlFor="showLabels">Show Labels</label>
+                  </div>
+                  
+                  <div className="flex items-center">
+                    <input
+                      type="checkbox"
+                      id="showMemberLengths"
+                      checked={displayOptions.showMemberLengths}
+                      onChange={() => toggleDisplayOption('showMemberLengths')}
+                      className="mr-2"
+                    />
+                    <label htmlFor="showMemberLengths">Show Member Lengths</label>
+                  </div>
+                </div>
+              </div>
+              
+              <div>
+                <h3 className="font-semibold">Calculated Values</h3>
+                <div className="text-sm mt-2 space-y-1">
+                  <p>Top Chord Length: {measurements.topChordLength}</p>
+                  <p>Top Chord Angle: {measurements.topChordAngle}°</p>
+                  <p>Bottom Angle: {measurements.bottomAngle}°</p>
+                  <p>Pitch Ratio: {dimensions.pitch.toFixed(1)}/12</p>
+                  <p>Height: {decimalToFIS(dimensions.height)}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <div className="md:w-2/3 border rounded-lg p-4 bg-white">
+            <div className="border-b pb-2 mb-4 flex justify-between items-center">
+              <h3 className="font-semibold">Truss Preview</h3>
+              <div className="flex space-x-2">
+                <button 
+                  onClick={generatePDF}
+                  className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 focus:outline-none"
+                >
+                  Export PDF
+                </button>
+              </div>
+            </div>
+            <div className="w-full h-96 bg-gray-50">
+              {generateTrussSVG()}
+            </div>
+            
+            <div className="mt-6 border-t pt-4">
+              <h3 className="font-semibold mb-2">Export/Import Data (Base64 JSON)</h3>
+              
+              {/* Export Section */}
+              <div className="mb-4">
+                <label className="block text-sm font-medium mb-1">Export Data:</label>
+                <div className="relative">
+                  <textarea 
+                    className="w-full h-24 p-2 text-xs font-mono border rounded bg-gray-50" 
+                    value={generateBase64Data()} 
+                    readOnly
+                  />
+                  <button 
+                    onClick={() => {
+                      navigator.clipboard.writeText(generateBase64Data());
+                      alert('Data copied to clipboard!');
+                    }}
+                    className="absolute top-2 right-2 px-2 py-1 bg-gray-200 text-xs rounded hover:bg-gray-300 focus:outline-none"
+                  >
+                    Copy
+                  </button>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  This Base64 encoded JSON contains all truss parameters and can be imported into other applications.
+                </p>
+              </div>
+              
+              {/* Import Section */}
+              <div>
+                <label className="block text-sm font-medium mb-1">Import Data:</label>
+                <div className="flex space-x-2">
+                  <input
+                    type="text"
+                    className="flex-1 p-2 text-xs font-mono border rounded"
+                    value={base64Data}
+                    onChange={(e) => setBase64Data(e.target.value)}
+                    placeholder="Paste Base64 encoded truss data here..."
+                  />
+                  <button
+                    onClick={() => {
+                      if (base64Data) {
+                        const success = importFromBase64(base64Data);
+                        if (success) {
+                          alert('Truss data imported successfully!');
+                          setBase64Data('');
+                        } else {
+                          alert('Invalid or corrupted truss data format.');
+                        }
+                      }
+                    }}
+                    className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 focus:outline-none"
+                    disabled={!base64Data}
+                  >
+                    Import
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    const App = () => {
+      return (
+        <div className="py-8">
+          <header className="mb-8 text-center">
+            <h1 className="text-3xl font-bold">Roof Truss Designer</h1>
+            <p className="text-gray-600 mt-2">Use at own risk.</p>
+          </header>
+          <main>
+            <TrussDesigner />
+          </main>
+          <footer className="mt-8 text-center text-gray-500 text-sm">
+            <p>All measurements in FIS (Feet-Inches-Sixteenths) format.</p>
+          </footer>
+        </div>
+      );
+    };
+
+    // Render the App component to the DOM
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
