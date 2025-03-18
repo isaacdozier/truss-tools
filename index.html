@@ -30,6 +30,7 @@
     .text { font-family: Arial; font-size: 12px; text-anchor: middle; }
     .arrow { stroke: #000; stroke-width: 0.75; fill: none; }
     .lumber { stroke: #000; stroke-width: 1.5; fill: none; }
+    .clickable-angle { cursor: pointer; fill: blue; text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -40,22 +41,6 @@
     const { useState, useEffect } = React;
 
     const TrussDesigner = () => {
-      // Function to generate base64 encoded JSON data
-      const generateBase64Data = () => {
-        // Create a data object with all the truss information
-        const trussData = {
-          dimensions: { ...dimensions },
-          measurements: calculateMeasurements(),
-          timestamp: new Date().toISOString(),
-        };
-        
-        // Convert to JSON string
-        const jsonString = JSON.stringify(trussData, null, 2);
-        
-        // Convert to Base64
-        return btoa(jsonString);
-      };
-      
       // Function to generate and download PDF
       const generatePDF = () => {
         const { jsPDF } = window.jspdf;
@@ -150,6 +135,7 @@
         pitch: 6, // rise/run ratio (e.g., 6/12)
         tailLeft: 2, // in feet
         tailRight: 2, // in feet
+        heelHeight: 0.5, // in feet (height from bottom for heel cut)
       });
       
       // Calculate height from pitch and span
@@ -169,6 +155,33 @@
         showLabels: true,
         showMemberLengths: true,
       });
+
+      // Configuration for the lumber cut visualizer URL
+      const [cutVisualizerConfig, setCutVisualizerConfig] = useState({
+        url: "https://isaacdozier.github.io/lumber-cut-/", // Default URL
+        defaultBoardLength: 96, // 8 feet in inches
+        defaultBoardWidth: 3.5, // Actual width of 2x4
+        defaultBoardThickness: 1.5 // Actual thickness of 2x4
+      });
+
+      // Function to generate cut link based on angle and type
+      const generateCutLink = (angle, cutType) => {
+        const { url, defaultBoardLength, defaultBoardWidth, defaultBoardThickness } = cutVisualizerConfig;
+        
+        // Define Y positions based on cut type
+        let yPosition = 0;
+        
+        if (cutType === 'heel') {
+          // For heel cuts, use fixed Y position of 0.25 inches
+          yPosition = 0.25;
+        } else if (cutType === 'topchord') {
+          // For top chord cuts, use full board width (3.5 inches)
+          yPosition = defaultBoardWidth;
+        }
+        
+        // Format the URL with parameters
+        return `${url}?length=${defaultBoardLength}&width=${defaultBoardWidth}&thickness=${defaultBoardThickness}&cut=${0.000},${yPosition.toFixed(3)},${angle}&print=true`;
+      };
 
       // Convert decimal feet to Feet-Inches-Sixteenths format
       const decimalToFIS = (decimalFeet) => {
@@ -225,12 +238,22 @@
         const topChordAngle = Math.atan(height / halfSpan) * (180 / Math.PI);
         const bottomAngle = 90 - topChordAngle;
         
+        // Calculate cut angles mapped to -90 to +90 range
+        const leftHeelAngle = 90 - bottomAngle;
+        const mappedLeftHeelAngle = leftHeelAngle > 90 ? leftHeelAngle - 180 : leftHeelAngle;
+        
+        const peakAngle = 180 - 2 * topChordAngle;
+        const mappedPeakAngle = peakAngle > 90 ? peakAngle - 180 : peakAngle;
+        
         return {
           topChordLength: decimalToFIS(topChordLength),
           topChordLengthDecimal: topChordLength.toFixed(2),
           topChordAngle: topChordAngle.toFixed(1),
           bottomAngle: bottomAngle.toFixed(1),
           slope: height / halfSpan, // Store the slope for tail calculations
+          leftHeelAngle: mappedLeftHeelAngle.toFixed(1),
+          rightHeelAngle: mappedLeftHeelAngle.toFixed(1), // Same as left for left-side approach
+          peakAngle: mappedPeakAngle.toFixed(1)
         };
       };
       
@@ -262,31 +285,6 @@
         // Update state with new dimensions
         setDimensions(newDimensions);
       };
-
-      // State for base64 data (for export/import)
-      const [base64Data, setBase64Data] = useState('');
-      
-      // Function to import truss data from base64
-      const importFromBase64 = (encodedData) => {
-        try {
-          // Decode Base64 to JSON string
-          const jsonString = atob(encodedData);
-          
-          // Parse JSON
-          const importedData = JSON.parse(jsonString);
-          
-          // Check if valid data format
-          if (importedData.dimensions) {
-            // Update dimensions state
-            setDimensions(importedData.dimensions);
-            return true;
-          }
-          return false;
-        } catch (error) {
-          console.error('Error importing data:', error);
-          return false;
-        }
-      };
       
       // Add an effect to ensure height and pitch are in sync on initial load
       useEffect(() => {
@@ -308,6 +306,143 @@
           ...prev,
           [option]: !prev[option]
         }));
+      };
+
+      // UI section for configuring the cut visualizer links
+      const renderCutVisualizerConfig = () => {
+        return (
+          <div>
+            <h3 className="font-semibold mb-2">Cut Visualizer Settings</h3>
+            
+            <div className="space-y-2">
+              <div>
+                <label className="block text-sm">Cut Visualizer URL:</label>
+                <input
+                  type="text"
+                  value={cutVisualizerConfig.url}
+                  onChange={(e) => setCutVisualizerConfig(prev => ({...prev, url: e.target.value}))}
+                  className="w-full p-1 border rounded text-sm"
+                  placeholder="e.g., https://isaacdozier.github.io/lumber-cut-/"
+                />
+              </div>
+              
+              <div className="flex gap-2">
+                <div className="w-1/3">
+                  <label className="block text-sm">Board Length (in):</label>
+                  <input
+                    type="number"
+                    value={cutVisualizerConfig.defaultBoardLength}
+                    onChange={(e) => setCutVisualizerConfig(prev => ({...prev, defaultBoardLength: parseFloat(e.target.value)}))}
+                    className="w-full p-1 border rounded"
+                    min="12"
+                    step="12"
+                  />
+                </div>
+                
+                <div className="w-1/3">
+                  <label className="block text-sm">Board Width (in):</label>
+                  <input
+                    type="number"
+                    value={cutVisualizerConfig.defaultBoardWidth}
+                    onChange={(e) => setCutVisualizerConfig(prev => ({...prev, defaultBoardWidth: parseFloat(e.target.value)}))}
+                    className="w-full p-1 border rounded"
+                    min="0.5"
+                    step="0.25"
+                  />
+                </div>
+                
+                <div className="w-1/3">
+                  <label className="block text-sm">Board Thickness (in):</label>
+                  <input
+                    type="number"
+                    value={cutVisualizerConfig.defaultBoardThickness}
+                    onChange={(e) => setCutVisualizerConfig(prev => ({...prev, defaultBoardThickness: parseFloat(e.target.value)}))}
+                    className="w-full p-1 border rounded"
+                    min="0.25"
+                    step="0.25"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      // Cut angles table - all from left side approach
+      const renderCutAnglesTable = () => {
+        return (
+          <div className="mt-4">
+            <h3 className="font-semibold mb-2">Required Cut Angles</h3>
+            <p className="text-xs text-gray-500 mb-2">All cuts positioned from left side of board. Negative angles are positioned at the top edge of the board.</p>
+            <table className="w-full border-collapse text-sm">
+              <thead>
+                <tr className="bg-gray-100">
+                  <th className="border p-1 text-left">Location</th>
+                  <th className="border p-1 text-left">Angle</th>
+                  <th className="border p-1 text-center">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td className="border p-1">Left Heel</td>
+                  <td className="border p-1">{measurements.leftHeelAngle}°</td>
+                  <td className="border p-1 text-center">
+                    <a 
+                      href={generateCutLink(measurements.leftHeelAngle, 'heel')}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 underline hover:text-blue-800"
+                    >
+                      Open Cut
+                    </a>
+                  </td>
+                </tr>
+                <tr>
+                  <td className="border p-1">Right Heel</td>
+                  <td className="border p-1">{measurements.rightHeelAngle}°</td>
+                  <td className="border p-1 text-center">
+                    <a 
+                      href={generateCutLink(measurements.rightHeelAngle, 'heel')}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 underline hover:text-blue-800"
+                    >
+                      Open Cut
+                    </a>
+                  </td>
+                </tr>
+                <tr>
+                  <td className="border p-1">Top Chord Left</td>
+                  <td className="border p-1">{measurements.peakAngle}°</td>
+                  <td className="border p-1 text-center">
+                    <a 
+                      href={generateCutLink(measurements.peakAngle, 'topchord')}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 underline hover:text-blue-800"
+                    >
+                      Open Cut
+                    </a>
+                  </td>
+                </tr>
+                <tr>
+                  <td className="border p-1">Top Chord Right</td>
+                  <td className="border p-1">{measurements.peakAngle}°</td>
+                  <td className="border p-1 text-center">
+                    <a 
+                      href={generateCutLink(measurements.peakAngle, 'topchord')}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 underline hover:text-blue-800"
+                    >
+                      Open Cut
+                    </a>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        );
       };
 
       // Generate SVG for the truss
@@ -339,6 +474,10 @@
         const rightTailX = rightHeelX + (tailRight * scale);
         const rightTailY = bottomY + (tailRight * scale * slope); // Follows top chord pitch exactly
         
+        // Calculate mapped cut angles for display
+        const leftHeelAngle = parseFloat(measurements.leftHeelAngle);
+        const peakAngle = parseFloat(measurements.peakAngle);
+        
         return (
           <svg xmlns="http://www.w3.org/2000/svg" className="truss-svg" viewBox={`0 0 ${canvasWidth} ${canvasHeight}`} width="100%" height="100%">
             {/* Styles */}
@@ -352,6 +491,7 @@
                   .text { font-family: Arial; font-size: 12px; text-anchor: middle; }
                   .arrow { stroke: #000; stroke-width: 0.75; fill: none; }
                   .lumber { stroke: #000; stroke-width: 1.5; fill: none; }
+                  .clickable-angle { cursor: pointer; fill: blue; text-decoration: underline; }
                 `}
               </style>
             </defs>
@@ -381,10 +521,6 @@
             <line x1={peakX-5} y1={peakY} x2={peakX+5} y2={peakY} className="thin-line" />
             <line x1={peakX-5} y1={bottomY-height*scale/2} x2={peakX+5} y2={bottomY-height*scale/2} className="thin-line" />
             
-            {/* Heel wedges */}
-            <path d={`M ${leftHeelX} ${bottomY} L ${leftHeelX+10} ${bottomY-10} L ${leftHeelX+10} ${bottomY} Z`} className="thin-line" fill="#fff" />
-            <path d={`M ${rightHeelX} ${bottomY} L ${rightHeelX-10} ${bottomY-10} L ${rightHeelX-10} ${bottomY} Z`} className="thin-line" fill="#fff" />
-            
             {/* Dimension lines and measurements (optional) */}
             {showDimensions && (
               <>
@@ -410,6 +546,13 @@
                 <line x1={peakX+25} y1={peakY} x2={peakX+35} y2={peakY} className="thin-line" />
                 <line x1={peakX+25} y1={bottomY} x2={peakX+35} y2={bottomY} className="thin-line" />
                 <text x={peakX+50} y={(peakY+bottomY)/2} className="text">{decimalToFIS(height)}</text>
+                
+                {/* Heel height dimension */}
+                <line x1={leftHeelX-30} y1={bottomY-dimensions.heelHeight*scale} x2={leftHeelX-5} y2={bottomY-dimensions.heelHeight*scale} className="dimension-line" />
+                <line x1={leftHeelX-30} y1={bottomY} x2={leftHeelX-30} y2={bottomY-dimensions.heelHeight*scale} className="dimension-line" />
+                <line x1={leftHeelX-35} y1={bottomY} x2={leftHeelX-25} y2={bottomY} className="thin-line" />
+                <line x1={leftHeelX-35} y1={bottomY-dimensions.heelHeight*scale} x2={leftHeelX-25} y2={bottomY-dimensions.heelHeight*scale} className="thin-line" />
+                <text x={leftHeelX-40} y={(bottomY+bottomY-dimensions.heelHeight*scale)/2} className="text" textAnchor="end">{decimalToFIS(dimensions.heelHeight)}</text>
               </>
             )}
             
@@ -421,10 +564,71 @@
                 <path d={`M ${peakX} ${peakY+20} A 20 20 0 0 0 ${peakX-20} ${peakY+20}`} className="thin-line" fill="none" />
                 <path d={`M ${peakX} ${peakY+20} A 20 20 0 0 1 ${peakX+20} ${peakY+20}`} className="thin-line" fill="none" />
                 
-                <text x={leftHeelX+10} y={bottomY-40} className="text">{measurements.bottomAngle}°</text>
-                <text x={rightHeelX-10} y={bottomY-40} className="text">{measurements.bottomAngle}°</text>
-                <text x={peakX-20} y={peakY+10} className="text">{measurements.topChordAngle}°</text>
-                <text x={peakX+20} y={peakY+10} className="text">{measurements.topChordAngle}°</text>
+                {/* Left heel angle with link */}
+                <a 
+                  href={generateCutLink(measurements.leftHeelAngle, 'heel')} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                >
+                  <text 
+                    x={leftHeelX+25} 
+                    y={bottomY-25} 
+                    className="text clickable-angle" 
+                  >
+                    {leftHeelAngle}° ↗
+                  </text>
+                </a>
+                
+                {/* Right heel angle with link (same as left in left-side approach) */}
+                <a 
+                  href={generateCutLink(measurements.rightHeelAngle, 'heel')} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                >
+                  <text 
+                    x={rightHeelX-25} 
+                    y={bottomY-25} 
+                    className="text clickable-angle" 
+                  >
+                    {leftHeelAngle}° ↗
+                  </text>
+                </a>
+                
+                {/* Top Chord angles with links */}
+                <a 
+                  href={generateCutLink(measurements.peakAngle, 'topchord')} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                >
+                  <text 
+                    x={peakX-25} 
+                    y={peakY+15} 
+                    className="text clickable-angle"
+                    textAnchor="end"
+                  >
+                    {peakAngle}° ↗
+                  </text>
+                </a>
+                
+                <a 
+                  href={generateCutLink(measurements.peakAngle, 'topchord')} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                >
+                  <text 
+                    x={peakX+25} 
+                    y={peakY+15} 
+                    className="text clickable-angle"
+                    textAnchor="start"
+                  >
+                    {peakAngle}° ↗
+                  </text>
+                </a>
+                
+                {/* Helper text for angle links */}
+                <text x={peakX} y={bottomY+110} className="text" fill="#555" textAnchor="middle" fontSize="10">
+                  Click on blue angles to open cut visualizer with proper angle settings
+                </text>
               </>
             )}
             
@@ -443,6 +647,10 @@
                 <text x={peakX} y={peakY-10} className="text">Peak</text>
                 
                 <text x={rightHeelX+50} y={peakY+10} className="text" textAnchor="end">{`${dimensions.pitch.toFixed(1)}/12 Pitch`}</text>
+                
+                {/* Heel cut labels */}
+                <text x={leftHeelX+15} y={bottomY-10} className="text" fill="#555" fontSize="10">Heel Cut</text>
+                <text x={rightHeelX-15} y={bottomY-10} className="text" fill="#555" fontSize="10">Heel Cut</text>
               </>
             )}
             
@@ -541,6 +749,21 @@
                       />
                     </div>
                   </div>
+                  
+                  <div>
+                    <label className="block text-sm">Heel Height (ft)</label>
+                    <input
+                      type="number"
+                      name="heelHeight"
+                      value={dimensions.heelHeight}
+                      onChange={handleDimensionChange}
+                      min="0"
+                      max="1"
+                      step="0.125"
+                      className="w-full p-1 border rounded"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">Height from bottom of board for heel cut</p>
+                  </div>
                 </div>
               </div>
               
@@ -624,60 +847,12 @@
             </div>
             
             <div className="mt-6 border-t pt-4">
-              <h3 className="font-semibold mb-2">Export/Import Data (Base64 JSON)</h3>
-              
-              {/* Export Section */}
-              <div className="mb-4">
-                <label className="block text-sm font-medium mb-1">Export Data:</label>
-                <div className="relative">
-                  <textarea 
-                    className="w-full h-24 p-2 text-xs font-mono border rounded bg-gray-50" 
-                    value={generateBase64Data()} 
-                    readOnly
-                  />
-                  <button 
-                    onClick={() => {
-                      navigator.clipboard.writeText(generateBase64Data());
-                      alert('Data copied to clipboard!');
-                    }}
-                    className="absolute top-2 right-2 px-2 py-1 bg-gray-200 text-xs rounded hover:bg-gray-300 focus:outline-none"
-                  >
-                    Copy
-                  </button>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  {renderCutVisualizerConfig()}
                 </div>
-                <p className="text-xs text-gray-500 mt-1">
-                  This Base64 encoded JSON contains all truss parameters and can be imported into other applications.
-                </p>
-              </div>
-              
-              {/* Import Section */}
-              <div>
-                <label className="block text-sm font-medium mb-1">Import Data:</label>
-                <div className="flex space-x-2">
-                  <input
-                    type="text"
-                    className="flex-1 p-2 text-xs font-mono border rounded"
-                    value={base64Data}
-                    onChange={(e) => setBase64Data(e.target.value)}
-                    placeholder="Paste Base64 encoded truss data here..."
-                  />
-                  <button
-                    onClick={() => {
-                      if (base64Data) {
-                        const success = importFromBase64(base64Data);
-                        if (success) {
-                          alert('Truss data imported successfully!');
-                          setBase64Data('');
-                        } else {
-                          alert('Invalid or corrupted truss data format.');
-                        }
-                      }
-                    }}
-                    className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 focus:outline-none"
-                    disabled={!base64Data}
-                  >
-                    Import
-                  </button>
+                <div>
+                  {renderCutAnglesTable()}
                 </div>
               </div>
             </div>
