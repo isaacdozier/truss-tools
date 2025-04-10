@@ -61,13 +61,33 @@
         }
         
         try {
-          // Convert SVG to a data URL (uses the canvg approach)
+          // Convert SVG to a data URL with better error handling
           const svgString = new XMLSerializer().serializeToString(svgElement);
+          
+          // Validate SVG data before conversion
+          if (!svgString || svgString.length === 0) {
+            throw new Error('Invalid SVG data');
+          }
+          
           const canvas = document.createElement('canvas');
-          // Set canvas dimensions to match the SVG viewBox
-          const viewBox = svgElement.getAttribute('viewBox').split(' ');
-          canvas.width = parseInt(viewBox[2], 10);
-          canvas.height = parseInt(viewBox[3], 10);
+          
+          // Set canvas dimensions to match the SVG viewBox with error checking
+          const viewBox = svgElement.getAttribute('viewBox');
+          if (!viewBox) {
+            throw new Error('SVG missing viewBox attribute');
+          }
+          
+          const viewBoxValues = viewBox.split(' ');
+          if (viewBoxValues.length !== 4) {
+            throw new Error('Invalid viewBox format');
+          }
+          
+          canvas.width = parseInt(viewBoxValues[2], 10);
+          canvas.height = parseInt(viewBoxValues[3], 10);
+          
+          if (isNaN(canvas.width) || isNaN(canvas.height)) {
+            throw new Error('Invalid viewBox dimensions');
+          }
           
           // Create context and draw SVG to canvas
           const ctx = canvas.getContext('2d');
@@ -77,47 +97,54 @@
           
           // Set up image onload handler
           img.onload = function() {
-            // Clear canvas and draw the image
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-            
-            // Get PNG data URL from canvas
-            const pngDataUrl = canvas.toDataURL('image/png');
-            
-            // Add title to PDF
-            pdf.setFont('helvetica', 'bold');
-            pdf.setFontSize(16);
-            pdf.text('Roof Truss Design', 15, 15);
-            
-            // Add specifications
-            pdf.setFont('helvetica', 'normal');
-            pdf.setFontSize(10);
-            let yPos = 25;
-            pdf.text('Specifications:', 15, yPos);
-            yPos += 5;
-            
-            // Add truss details
-            pdf.text(`Span: ${decimalToFIS(dimensions.span)}`, 20, yPos); yPos += 5;
-            pdf.text(`Height: ${decimalToFIS(dimensions.height)}`, 20, yPos); yPos += 5;
-            pdf.text(`Pitch: ${dimensions.pitch.toFixed(1)}/12`, 20, yPos); yPos += 5;
-            pdf.text(`Top Chord Length: ${calculateMeasurements().topChordLength}`, 20, yPos); yPos += 10;
-            
-            // Calculate image dimensions
-            const pageWidth = pdf.internal.pageSize.getWidth();
-            const pageHeight = pdf.internal.pageSize.getHeight();
-            const imgWidth = pageWidth - 30; // leave margin
-            const imgHeight = (canvas.height * imgWidth) / canvas.width;
-            
-            // Add the PNG image to PDF
-            pdf.addImage(pngDataUrl, 'PNG', 15, yPos, imgWidth, imgHeight);
-            
-            // Add footer
-            const date = new Date().toLocaleDateString();
-            pdf.setFontSize(8);
-            pdf.text(`Generated on ${date}`, pdf.internal.pageSize.getWidth() - 50, pdf.internal.pageSize.getHeight() - 10);
-            
-            // Save PDF
-            pdf.save('truss-design.pdf');
+            try {
+              // Clear canvas and draw the image
+              ctx.clearRect(0, 0, canvas.width, canvas.height);
+              ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+              
+              // Get PNG data URL from canvas
+              const pngDataUrl = canvas.toDataURL('image/png');
+              
+              // Add title to PDF
+              pdf.setFont('helvetica', 'bold');
+              pdf.setFontSize(16);
+              pdf.text('Roof Truss Design', 15, 15);
+              
+              // Add specifications
+              pdf.setFont('helvetica', 'normal');
+              pdf.setFontSize(10);
+              let yPos = 25;
+              pdf.text('Specifications:', 15, yPos);
+              yPos += 5;
+              
+              // Add truss details
+              pdf.text(`Span: ${decimalToFIS(dimensions.span)}`, 20, yPos); yPos += 5;
+              pdf.text(`Height: ${decimalToFIS(dimensions.height)}`, 20, yPos); yPos += 5;
+              pdf.text(`Pitch: ${dimensions.pitch.toFixed(1)}/12`, 20, yPos); yPos += 5;
+              
+              const measurements = calculateMeasurements();
+              pdf.text(`Top Chord Length: ${measurements.topChordLength}`, 20, yPos); yPos += 10;
+              
+              // Calculate image dimensions
+              const pageWidth = pdf.internal.pageSize.getWidth();
+              const pageHeight = pdf.internal.pageSize.getHeight();
+              const imgWidth = pageWidth - 30; // leave margin
+              const imgHeight = (canvas.height * imgWidth) / canvas.width;
+              
+              // Add the PNG image to PDF
+              pdf.addImage(pngDataUrl, 'PNG', 15, yPos, imgWidth, imgHeight);
+              
+              // Add footer
+              const date = new Date().toLocaleDateString();
+              pdf.setFontSize(8);
+              pdf.text(`Generated on ${date}`, pdf.internal.pageSize.getWidth() - 50, pdf.internal.pageSize.getHeight() - 10);
+              
+              // Save PDF
+              pdf.save('truss-design.pdf');
+            } catch (error) {
+              console.error('Error generating PDF image:', error);
+              alert('Error generating PDF. See console for details.');
+            }
           };
           
           // Set image source to SVG data URL
@@ -125,7 +152,7 @@
           
         } catch (err) {
           console.error('Error generating PDF:', err);
-          alert('Error generating PDF. See console for details.');
+          alert('Error generating PDF: ' + (err.message || 'Unknown error'));
         }
       };
       // State for truss dimensions and properties
@@ -242,8 +269,9 @@
         const leftHeelAngle = 90 - bottomAngle;
         const mappedLeftHeelAngle = leftHeelAngle > 90 ? leftHeelAngle - 180 : leftHeelAngle;
         
-        const peakAngle = 180 - 2 * topChordAngle;
-        const mappedPeakAngle = peakAngle > 90 ? peakAngle - 180 : peakAngle;
+        const peakAngle = topChordAngle - 90; // Gives proper complementary angle that's negative
+        const mappedPeakAngle = peakAngle > 90 ? peakAngle - 180 : (peakAngle < -90 ? peakAngle + 180 : peakAngle);
+
         
         return {
           topChordLength: decimalToFIS(topChordLength),
@@ -286,7 +314,7 @@
         setDimensions(newDimensions);
       };
       
-      // Add an effect to ensure height and pitch are in sync on initial load
+      // Add an effect to ensure height and pitch are in sync on initial load and when dependencies change
       useEffect(() => {
         // Calculate height based on current pitch and span to ensure consistency
         const calculatedHeight = calculateHeightFromPitch(dimensions.pitch, dimensions.span);
@@ -298,7 +326,7 @@
             height: calculatedHeight
           }));
         }
-      }, []);
+      }, [dimensions.pitch, dimensions.span]); // Add dependencies to ensure calculations stay in sync
 
       // Toggle display options
       const toggleDisplayOption = (option) => {
@@ -865,13 +893,13 @@
       return (
         <div className="py-8">
           <header className="mb-8 text-center">
-            <p className="text-gray-600 mt-2">Use at own risk.</p>
+            <h2>Truss Builder</h2>
           </header>
           <main>
             <TrussDesigner />
           </main>
           <footer className="mt-8 text-center text-gray-500 text-sm">
-            <p>All measurements in FIS (Feet-Inches-Sixteenths) format.</p>
+            <p>Beta Version. Use at Own Risk</p>
           </footer>
         </div>
       );
